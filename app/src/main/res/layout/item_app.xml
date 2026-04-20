@@ -19,14 +19,14 @@
         android:layout_height="wrap_content"
         android:layout_weight="1"
         android:text="App Name"
-        android:textColor="#000000"
+        android:textColor="?attr/colorOnSurface"
         android:textSize="16sp" />
 
     <EditText
         android:id="@+id/editLimit"
         android:layout_width="80dp"
         android:layout_height="wrap_content"
-        android:hint="Hours"
+        android:hint="Minutes"
         android:inputType="number"
         android:textAlignment="center"
         android:textSize="14sp" />

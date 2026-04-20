@@ -48,6 +48,8 @@ class MainActivity : AppCompatActivity() {
                 // Save the package name (key) and the hours (value)
                 editor.putInt(app.packageName, app.hourLimit)
                 count++
+            } else {
+                editor.remove(app.packageName) // Clean up the disk!
             }
         }
 
