@@ -14,6 +14,7 @@ import java.util.concurrent.TimeUnit
 
 class ThrottlingVpnService : VpnService() {
 
+    private var vpnThread: Thread? = null
     private var vpnInterface: ParcelFileDescriptor? = null
     private val scheduler = Executors.newSingleThreadScheduledExecutor()
     // volatile ensures the VPN thread sees the most up-to-date value from the monitor thread
@@ -40,7 +41,10 @@ class ThrottlingVpnService : VpnService() {
     }
 
     private fun establishVpn(packageName: String? = null) {
-        if (packageName == lastThrottledApp && vpnInterface !== null) return
+        if (packageName == lastThrottledApp && vpnInterface !== null) {
+            Log.v("ESTABLISH_VPN", "does not reset after 5 seconds")
+            return
+        }
 
         try {
             // Close the old interface if it exists
@@ -57,6 +61,7 @@ class ThrottlingVpnService : VpnService() {
                 builder.addAllowedApplication(packageName)
                 // If we are targeting one app, we can use a broad route for just that app
                 builder.addRoute("0.0.0.0", 0)
+                builder.addRoute("::", 0)
                 Log.d("SQUEEZE", "VPN now targeting: $packageName")
             }
 
@@ -123,67 +128,66 @@ class ThrottlingVpnService : VpnService() {
     }
 
     private fun startVpnThread() {
+        // Kill any existing thread before starting a new one
+        vpnThread?.interrupt()
         Log.d("SQUEEZE", "startVpnThread")
 
-        Thread {
+        vpnThread = Thread {
             val vpnInterfaceRef = vpnInterface ?: return@Thread
             val input = FileInputStream(vpnInterfaceRef.fileDescriptor)
             val output = FileOutputStream(vpnInterfaceRef.fileDescriptor)
             val buffer = ByteBuffer.allocate(32768)
 
             try {
-                Log.d("SQUEEZE", "currentThread not interrupted, ${Thread.currentThread().isInterrupted}")
                 while (!Thread.currentThread().isInterrupted) {
                     val length = input.read(buffer.array())
-                    if (length > 0) {
-                        // --- THE THROTTLING LOGIC ---
-                        Log.d("SQUEEZE", "Captured packet: $length bytes. Throttling: $isThrottling")
-                        if (isThrottling) {
-                            val delay = when (currentSqueezeLevel) {
-                                1 -> 5L   // Micro-stutter
-                                2 -> 20L  // Heavy lag
-                                3 -> 100L // Buffering hell
-                                4 -> 1000L // Functional block
-                                else -> 0L
-                            }
-                            Log.d("SQUEEZE", "delay, ${delay}")
-                            if (delay > 0) Thread.sleep(delay)
-                        }
+                    if (length <= 0) continue // Skip empty reads
 
-                        // Write the packet back out to the "real" internet
-                        // In a simple pass-through VPN, this is where we'd send it to a socket
-                        // But for a local "throttle," we are just keeping the buffer moving
-                        output.write(buffer.array(), 0, length)
-                        buffer.clear()
+                    Log.v("SQUEEZE_INIT", "Length >0 check: $length bytes, isThrottling $isThrottling and currentSqueezeLevel, $currentSqueezeLevel")
+
+                    if (length > 200 && isThrottling) { // only throttle the data packets (>64), not the heartbeat (<64) ones
+                        // 1. Determine the Speed Limit (Bytes Per Second)
+                        // If not throttling, set to a huge number (unlimited)
+                        val bytesAllowed = when (currentSqueezeLevel) {
+                            1 -> 2_000L
+                            2 -> 1_000L
+                            3 -> 500L
+                            4 -> 1L        // Absolute block
+                            else -> -1L
+                        }
+                        Log.v("SPEED_LIMIT", "bytesAllowed $bytesAllowed")
+                        if (bytesAllowed < length) {
+                            // Calculate how many milliseconds we need to wait to "earn" these bytes
+                            val waitTimeMs = ((length - bytesAllowed) * 1000)
+                            Log.v(
+                                "SQUEEZE_MATH",
+                                "Squeezing packet ($length bytes) for ${waitTimeMs}ms. Remaining budget: $bytesAllowed"
+                            )
+                            Thread.sleep(waitTimeMs.coerceAtMost(700L))
+                        }
                     }
+                    Log.v("SQUEEZE_BYPASS", "Heartbeat passed: $length bytes")
+                    // 3. Always write back
+                    output.write(buffer.array(), 0, length)
+                    buffer.clear()
                 }
             } catch (e: Exception) {
-                Log.e("VPN_PUMP", "Pump error: ${e.message}")
+                // EBADF is expected here when vpnInterface.close() is called from another thread
+                if (e.message?.contains("EBADF") == true) {
+                    Log.d("SQUEEZE", "VPN Interface closed, thread exiting safely.")
+                } else {
+                    Log.e("VPN_PUMP", "Pump error: ${e.message}")
+                }
             }
-        }.start()
+        }.apply {
+            name = "VPN-Pump-Thread"
+            start()
+        }
     }
     private fun applySqueeze(level: Int) {
-        isThrottling = true
-        when (level) {
-            1 -> {
-                Log.d("SQUEEZE", "Level 1: 50% reached. Adding jitter.")
-                currentSqueezeLevel = 1
-            }
-            2 -> {
-                Log.d("SQUEEZE", "Level 2: 75% reached. Throttling bandwidth.")
-                currentSqueezeLevel = 2
-            }
-            3 -> {
-                Log.d("SQUEEZE", "Level 3: 90% reached. Dial-up mode initiated.")
-                currentSqueezeLevel = 3
-            }
-            4 -> {
-                Log.d("SQUEEZE", "Level 4: 100% reached. HARD BLOCK.")
-                currentSqueezeLevel = 4
-            }
-        }
-        // In Phase 3, we will insert code here to actually sleep the
-        // VPN thread for X milliseconds based on the level.
+        this.isThrottling = true
+        this.currentSqueezeLevel = level
+        Log.d("SQUEEZE", "squeeze level $level")
     }
 
     private fun stopSqueeze() {
