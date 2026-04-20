@@ -59,6 +59,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun getInstalledApps(): List<AppLimitModel> {
         val appList = mutableListOf<AppLimitModel>()
+        val sharedPrefs = getSharedPreferences("AppLimits", Context.MODE_PRIVATE)
         try {
             val pm = packageManager
             val intent = Intent(Intent.ACTION_MAIN, null).apply {
@@ -74,8 +75,8 @@ class MainActivity : AppCompatActivity() {
                 val packageName = activityInfo.packageName
                 val appName = resolveInfo.loadLabel(pm).toString()
                 val icon = resolveInfo.loadIcon(pm)
-
-                appList.add(AppLimitModel(appName, packageName, icon))
+                val savedLimit = sharedPrefs.getInt(packageName, 0)
+                appList.add(AppLimitModel(appName, packageName, icon, savedLimit))
             }
         } catch (e: Exception) {
             Log.e("TAG_DEBUG", "Error fetching apps: ${e.message}")
