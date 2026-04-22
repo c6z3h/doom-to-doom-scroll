@@ -15,6 +15,7 @@ class AppAdapter(private val apps: List<AppLimitModel>) : RecyclerView.Adapter<A
         var textWatcher: TextWatcher? = null
         val icon: ImageView = view.findViewById(R.id.imgIcon)
         val name: TextView = view.findViewById(R.id.txtAppName)
+        val usageTime: TextView = view.findViewById(R.id.usageTimeText) // Add this
         val limit: EditText = view.findViewById(R.id.editLimit)
     }
 
@@ -25,21 +26,25 @@ class AppAdapter(private val apps: List<AppLimitModel>) : RecyclerView.Adapter<A
 
     override fun onBindViewHolder(holder: ViewHolder, position: Int) {
         val app = apps[position]
-        holder.limit.onFocusChangeListener = null
+        holder.textWatcher?.let { holder.limit.removeTextChangedListener(it) }
 
-        // 2. Update the UI to match the current data model
         holder.name.text = app.appName
         holder.icon.setImageDrawable(app.icon)
-        holder.limit.setText(app.hourLimit.toString())
 
-        // 3. Only update the model when the user FINISHES typing or changes focus
-        holder.limit.onFocusChangeListener = View.OnFocusChangeListener { v, hasFocus ->
-            if (!hasFocus) {
-                // User stopped touching this box, save the value to the model
-                val newValue = (v as EditText).text.toString().toIntOrNull() ?: 0
-                app.hourLimit = newValue
-            }
+        holder.limit.clearFocus()
+        holder.limit.setText(if (app.hourLimit > 0) app.hourLimit.toString() else "")
+
+        // 2. Remove the FocusChangeListener and use doAfterTextChanged instead
+        // This ensures that the moment you type '6', the model has 6.
+        // The moment you type '0', the model has 60.
+        holder.textWatcher = holder.limit.doAfterTextChanged { text ->
+            val newValue = text.toString().toIntOrNull() ?: 0
+            app.hourLimit = newValue
         }
+
+        // Display usage
+        holder.usageTime.text = if (app.usageMinutes > 0) "${app.usageMinutes}m used today" else "Not used today"
+        holder.usageTime.alpha = if (app.usageMinutes > 0) 1.0f else 0.5f
     }
 
     override fun getItemCount() = apps.size

@@ -70,7 +70,7 @@ class ThrottlingVpnService : VpnService() {
 
             // Note: The VPN thread usually needs to be restarted
             // because the FileDescriptor changed.
-            startVpnThread()
+           startVpnThread()
 
         } catch (e: Exception) {
             Log.e("SQUEEZE", "Could not establish VPN for $packageName: ${e.message}")
@@ -78,28 +78,37 @@ class ThrottlingVpnService : VpnService() {
     }
     private fun checkCurrentUsage() {
         val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val endTime = System.currentTimeMillis()
-        val startTime = endTime - 1000 * 60 * 60 * 24 // Look at last 24 hours
+        val calendar = java.util.Calendar.getInstance()
+        val endTime = calendar.timeInMillis
 
-        val stats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime) ?: emptyList()
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        calendar.set(java.util.Calendar.MINUTE, 0)
+        calendar.set(java.util.Calendar.SECOND, 0)
+        calendar.set(java.util.Calendar.MILLISECOND, 0)
+        val startTime = calendar.timeInMillis // Start of today (Midnight)
 
-        // Find the app currently in the foreground
-        val sortedStats = stats.sortedByDescending { it.lastTimeUsed }
-        if (sortedStats.isNotEmpty()) {
-            val topApp = sortedStats[0]
+        // 2. USE AGGREGATE: This sums up all sessions for the day into one Map
+        val statsMap = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
+
+        // 3. IDENTIFY THE CURRENT APP: Find what the user is looking at right now
+        // Note: We still use queryUsageStats just to find the "lastTimeUsed" order
+        val rawStats = usageStatsManager.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, startTime, endTime)
+        val topApp = rawStats?.maxByOrNull { it.lastTimeUsed }
+
+        if (topApp !== null) {
             val packageName = topApp.packageName
-            val totalTimeMs = topApp.totalTimeInForeground
+            // Use the aggregated Map to get the ACTUAL total time used today
+            val totalTimeMs = statsMap[packageName]?.totalTimeInForeground ?: 0L
 
             val sharedPrefs = getSharedPreferences("AppLimits", Context.MODE_PRIVATE)
-            val limitHours = sharedPrefs.getInt(packageName, 0)
-
-            if (limitHours > 0) {
+            val limitMins = sharedPrefs.getInt(packageName, 0)
+            if (limitMins > 0) {
                 // TODO temp testing with minutes instead of hours
                 // 1 minute = 60,000 milliseconds
-                val limitMs = limitHours * 60000L
+                val limitMs = limitMins * 60000L
 //                val limitMs = limitHours * 3600000L
                 val progress = (totalTimeMs.toDouble() / limitMs.toDouble())
-
+                Log.v("SQUEEZE", "totalTimeMs ${totalTimeMs / 60000L}, limitMins $limitMins, progress $progress")
                 val newLevel = when {
                     progress >= 1.0  -> 4 // Blocked
                     progress >= 0.9  -> 3 // Super Lag

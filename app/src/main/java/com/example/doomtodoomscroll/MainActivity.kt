@@ -12,38 +12,58 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import android.app.usage.UsageStatsManager
 
 class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        Log.d("TAG_DEBUG", "onCreate")
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main) // This "inflates" your XML
-        Log.d("TAG_DEBUG", "setContentView ok")
+        setContentView(R.layout.activity_main)
+
         val recyclerView = findViewById<RecyclerView>(R.id.appRecyclerView)
         val btnSave = findViewById<Button>(R.id.btnSave)
-        Log.d("TAG_DEBUG", "recyclerView ok")
-        // 1. Get the list of apps
-        val apps = getInstalledApps()
 
-        // 2. Setup the list
+        // 1. Get the list of apps
+        val allApps = getInstalledApps()
+        val usageMap = getUsageStatsLast24h() // New helper function below
+
+        // 2. Map usage to the models and sort strictly by usage
+        val sortedApps = allApps.map { app ->
+            app.apply {
+                // Convert millis to minutes for easier display
+                usageMinutes = (usageMap[packageName] ?: 0L) / 60000
+            }
+        }.sortedByDescending { it.usageMinutes } // Most used at the very top
+
+        // 3. Setup the list
         recyclerView.layoutManager = LinearLayoutManager(this)
-        recyclerView.adapter = AppAdapter(apps)
+        recyclerView.adapter = AppAdapter(sortedApps)
 
         // 3. Setup the Save button
         btnSave.setOnClickListener {
-            saveLimits(apps)
+            saveLimits(sortedApps)
             checkAndRequestPermissions() // Now we start the VPN/Usage process
         }
     }
 
+    private fun getUsageStatsLast24h(): Map<String, Long> {
+        val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+        val endTime = System.currentTimeMillis()
+        val startTime = endTime - (24 * 60 * 60 * 1000)
+
+        val stats = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
+        return stats.mapValues { it.value.totalTimeInForeground }
+    }
+
     private fun saveLimits(apps: List<AppLimitModel>) {
+        Log.v("SAVE_LIMITS", "test")
         // Open a storage file named "AppLimits"
         val sharedPrefs = getSharedPreferences("AppLimits", Context.MODE_PRIVATE)
         val editor = sharedPrefs.edit()
 
         var count = 0
         for (app in apps) {
+            Log.v("SAVE_LIMITS", "${app.packageName}, ${app.hourLimit}")
             if (app.hourLimit > 0) {
                 // Save the package name (key) and the hours (value)
                 editor.putInt(app.packageName, app.hourLimit)
