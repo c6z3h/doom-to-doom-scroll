@@ -15,17 +15,31 @@ import androidx.recyclerview.widget.RecyclerView
 import android.app.usage.UsageStatsManager
 
 class MainActivity : AppCompatActivity() {
+    private lateinit var recyclerView: RecyclerView
+    private lateinit var allApps: List<AppLimitModel>
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
-        val recyclerView = findViewById<RecyclerView>(R.id.appRecyclerView)
+        recyclerView = findViewById<RecyclerView>(R.id.appRecyclerView)
         val btnSave = findViewById<Button>(R.id.btnSave)
 
+        recyclerView.layoutManager = LinearLayoutManager(this)
+
+        // 3. Setup the Save button
+        btnSave.setOnClickListener {
+            val currentList = (recyclerView.adapter as? AppAdapter)?.getAppsList() ?: emptyList()
+            saveLimits(currentList)
+            checkAndRequestPermissions() // Now we start the VPN/Usage process
+        }
+    }
+
+    private fun refreshUsageData() {
+        // TODO add skeleton loading
         // 1. Get the list of apps
-        val allApps = getInstalledApps()
-        val usageMap = getUsageStatsLast24h() // New helper function below
+        allApps = getInstalledApps()
+        val usageMap = getUsageStatsToday() // New helper function below
 
         // 2. Map usage to the models and sort strictly by usage
         val sortedApps = allApps.map { app ->
@@ -35,21 +49,22 @@ class MainActivity : AppCompatActivity() {
             }
         }.sortedByDescending { it.usageMinutes } // Most used at the very top
 
-        // 3. Setup the list
-        recyclerView.layoutManager = LinearLayoutManager(this)
+        // Update the adapter with new data
         recyclerView.adapter = AppAdapter(sortedApps)
 
-        // 3. Setup the Save button
-        btnSave.setOnClickListener {
-            saveLimits(sortedApps)
-            checkAndRequestPermissions() // Now we start the VPN/Usage process
-        }
+        Log.d("TAG_DEBUG", "Usage stats refreshed onResume")
     }
 
-    private fun getUsageStatsLast24h(): Map<String, Long> {
+    private fun getUsageStatsToday(): Map<String, Long> {
         val usageStatsManager = getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
-        val endTime = System.currentTimeMillis()
-        val startTime = endTime - (24 * 60 * 60 * 1000)
+        val calendar = java.util.Calendar.getInstance()
+        val endTime = calendar.timeInMillis
+
+        calendar.set(java.util.Calendar.HOUR_OF_DAY, 0)
+        calendar.set(java.util.Calendar.MINUTE, 0)
+        calendar.set(java.util.Calendar.SECOND, 0)
+        calendar.set(java.util.Calendar.MILLISECOND, 0)
+        val startTime = calendar.timeInMillis // Start of today (Midnight)
 
         val stats = usageStatsManager.queryAndAggregateUsageStats(startTime, endTime)
         return stats.mapValues { it.value.totalTimeInForeground }
@@ -109,7 +124,13 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        checkAndRequestPermissions()
+
+        if (::recyclerView.isInitialized) {
+            checkAndRequestPermissions()
+            if (hasUsageStatsPermission()) {
+                refreshUsageData()
+            }
+        }
     }
 
     private val vpnLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->

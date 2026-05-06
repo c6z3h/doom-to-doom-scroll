@@ -43,9 +43,27 @@ class AppAdapter(private val apps: List<AppLimitModel>) : RecyclerView.Adapter<A
         }
 
         // Display usage
-        holder.usageTime.text = if (app.usageMinutes > 0) "${app.usageMinutes}m used today" else "Not used today"
-        holder.usageTime.alpha = if (app.usageMinutes > 0) 1.0f else 0.5f
+        if (app.isLoading) {
+            // Show Skeleton State
+            holder.usageTime.text = "   " // Empty space to maintain width
+            holder.usageTime.setBackgroundResource(R.drawable.skeleton_text)
+
+            // Optional: Simple Fade animation to make it feel "alive"
+            holder.usageTime.animate().alpha(0.3f).setDuration(600).withEndAction {
+                holder.usageTime.animate().alpha(1.0f).setDuration(600).start()
+            }.start()
+        } else {
+            holder.usageTime.animate().cancel() // Stop animation
+            holder.usageTime.background = null // Remove skeleton bg
+            holder.usageTime.text =
+                if (app.usageMinutes > 0) "${app.usageMinutes}m used today" else "Not used today"
+            holder.usageTime.alpha = if (app.usageMinutes > 0) 1.0f else 0.5f
+        }
     }
 
     override fun getItemCount() = apps.size
+
+    fun getAppsList(): List<AppLimitModel> {
+        return apps;
+    }
 }

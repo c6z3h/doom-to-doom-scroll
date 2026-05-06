@@ -119,10 +119,13 @@ class ThrottlingVpnService : VpnService() {
 
                 if (newLevel > 0) {
                     applySqueeze(newLevel)
-                    establishVpn(packageName)
+                    // Only call this if the targeted app has actually changed
+                    if (lastThrottledApp != packageName) {
+                        establishVpn(packageName)
+                    }
                 } else {
-                    stopSqueeze()
                     establishVpn(null)
+                    stopSqueeze()
                 }
 
                 Log.d("SQUEEZE", "$packageName is at ${(progress * 100).toInt()}%")
@@ -147,6 +150,8 @@ class ThrottlingVpnService : VpnService() {
             val output = FileOutputStream(vpnInterfaceRef.fileDescriptor)
             val buffer = ByteBuffer.allocate(32768)
 
+            var bucket = 0L
+            var lastCheck = System.currentTimeMillis()
             try {
                 while (!Thread.currentThread().isInterrupted) {
                     val length = input.read(buffer.array())
@@ -154,25 +159,34 @@ class ThrottlingVpnService : VpnService() {
 
                     Log.v("SQUEEZE_INIT", "Length >0 check: $length bytes, isThrottling $isThrottling and currentSqueezeLevel, $currentSqueezeLevel")
 
-                    if (length > 200 && isThrottling) { // only throttle the data packets (>64), not the heartbeat (<64) ones
-                        // 1. Determine the Speed Limit (Bytes Per Second)
-                        // If not throttling, set to a huge number (unlimited)
-                        val bytesAllowed = when (currentSqueezeLevel) {
-                            1 -> 2_000L
-                            2 -> 1_000L
-                            3 -> 500L
-                            4 -> 1L        // Absolute block
-                            else -> -1L
+                    if (length > 64 && isThrottling) { // only throttle the data packets (>64), not the heartbeat (<64) ones
+                        val now = System.currentTimeMillis()
+                        val elapsed = now - lastCheck
+
+                        val bytesPerMs = when (currentSqueezeLevel) {
+                            1 -> 400.0 // Give it enough air to breathe, but barely
+                            2 -> 100.0
+                            3 -> 20.0
+                            4 -> 0.0
+                            else -> 20000.0
                         }
-                        Log.v("SPEED_LIMIT", "bytesAllowed $bytesAllowed")
-                        if (bytesAllowed < length) {
-                            // Calculate how many milliseconds we need to wait to "earn" these bytes
-                            val waitTimeMs = ((length - bytesAllowed) * 1000)
-                            Log.v(
-                                "SQUEEZE_MATH",
-                                "Squeezing packet ($length bytes) for ${waitTimeMs}ms. Remaining budget: $bytesAllowed"
-                            )
-                            Thread.sleep(waitTimeMs.coerceAtMost(700L))
+                        val maxBurst = 10000L
+                        // Add "earned" bytes to the bucket based on time passed
+                        bucket += (elapsed * bytesPerMs).toLong()
+                        lastCheck = now
+                        if (bucket > maxBurst) bucket = maxBurst
+
+                        // If the packet is bigger than our budget, wait until we can afford it
+                        if (length > bucket) {
+                            Log.v("SQUEEZE_MATH", "$length length exceeded $bucket bucket")
+                            val waitTime = ((length - bucket) / bytesPerMs).toLong()
+                            Thread.sleep(waitTime)
+                            // Pay the debt and reset
+                            bucket = 0
+                            lastCheck = System.currentTimeMillis() // Update again after sleep!
+                        } else {
+                            bucket -= length
+                            Log.v("SQUEEZE_MATH", "PASSED: $length bytes, bucket now at $bucket")
                         }
                     }
                     Log.v("SQUEEZE_BYPASS", "Heartbeat passed: $length bytes")
